@@ -48,6 +48,48 @@ This fails for two reasons:
 
 ## How a state update happens
 
+```jsx
+function Counter() {
+  // Step 1 — React gives us the current count (0 on first render)
+  const [count, setCount] = useState(0);
+
+  const handleClick = () => {
+    // Step 2 — you call setCount with the next value
+    // count is still 0 here — React hasn't changed it yet for this render
+    // Step 3 — React queues the update: count = 1 (doesn't apply it yet)
+    // Step 4 — React batches this with any other setState calls in the same event
+    setCount(count + 1);
+
+    console.log(count); // still 0 — the value is fixed for this render
+  };
+
+  // Step 5 — after re-render, count is 1, DOM updates: "Clicked 1 times"
+  return <button onClick={handleClick}>Clicked {count} times</button>;
+}
+```
+
+
+```
+  handleClick()
+  setCount(count + 1)        ← you call this
+         │
+         ▼
+  📦 Batching
+  React collects all setState calls
+  in the same event into one batch
+         │
+         ▼
+  🗂️ Update Queue
+  count = 1  ← sits in React's internal queue
+         │
+         ▼
+  🔄 Counter re-renders
+  useState() returns new count → 1
+  UI updates: "Clicked 1 times"
+```
+
+
+
 When you click the button, this is the sequence:
 
 1. **The click runs the handler.** `handleClick` runs with the `count` value from the current render, which is `0`.
@@ -55,19 +97,6 @@ When you click the button, this is the sequence:
 3. **React schedules a re-render.** The component is marked for an update, and React processes the queue.
 4. **React re-runs the component.** When the component function runs again, `useState` applies the queued update and returns the new value, `1`.
 5. **The screen updates.** React compares the new output with the old one and updates the DOM.
-
-```jsx
-function Counter() {
-  const [count, setCount] = useState(0); // returns 0 in render 1, 1 in render 2
-
-  const handleClick = () => {
-    setCount(count + 1); // queues an update, does not change count now
-    console.log(count); // still 0: this function belongs to render 1
-  };
-
-  return <button onClick={handleClick}>Clicked {count} times</button>;
-}
-```
 
 ### Why the console shows the old value
 
@@ -104,7 +133,29 @@ Now React processes the queue as `0 → 1 → 2`, and the result is `2`.
 
 ## Batching
 
-When you call the setter several times in the same event, React combines the updates into one re-render. This is called **batching**. Since React 18, batching happens automatically, even in promises and timeouts.
+When you update state, React doesn't immediately stop everything and re-render the screen on every single line. Instead, it groups multiple state updates together into **one single re-render**. This is called **batching**.
+
+### Why does React batch updates?
+
+1. **Performance (Prevents unnecessary re-renders)**
+   Re-rendering components and updating the browser DOM is expensive. If you update 3 state variables in a row, re-rendering 3 times would cause lag:
+   
+   ```
+   Without batching:  setState() → Render 1 → setState() → Render 2 → setState() → Render 3 🐢
+   With batching:     setState() + setState() + setState() ──▶ Single Render 🚀
+   ```
+
+2. **Prevents half-finished UI states (Visual Glitches)**
+   Imagine you update a user's name and age at the same time:
+   ```jsx
+   setFirstName("John");
+   setLastName("Doe");
+   ```
+   Without batching, the component would re-render halfway through — showing the new first name with the old last name for a split second before updating again. Batching ensures the UI updates only when all related changes are ready.
+
+> **Analogy:** Think of batching like a waiter at a restaurant. They don't run to the kitchen after you order your drink, run back to take your appetizer, and run back again for your main course. They write down your entire order first, then visit the kitchen once.
+
+Since React 18, batching happens **automatically everywhere** — inside event handlers, `setTimeout`, `fetch` callbacks, and promises.
 
 ## Each component instance has its own state
 
@@ -112,16 +163,59 @@ If you render `<Counter />` twice, each one keeps its own `count`. Changing one 
 
 ## Updating objects and arrays
 
-Don't change the existing object or array directly. Create a new one, so React can detect the change:
+In JavaScript, objects and arrays are stored **by reference**, not by value. This means a variable doesn't hold the actual data — it holds a pointer to where the data lives in memory.
+
+```js
+const user = { name: "Asha", age: 25 };
+const same = user;
+
+same.age = 26;
+
+console.log(user === same); // true — both point to the same object in memory
+```
+
+React detects state changes by comparing the old reference with the new one:
+
+```
+old reference ──▶ { name: "Asha", age: 25 }
+new reference ──▶ { name: "Asha", age: 25 }   ← same object, same address
+
+React sees: old === new → no change → skips re-render ❌
+```
+
+So when you do `user.age = 26` directly, you mutate the same object. React compares the old and new references, sees they are identical, and does nothing.
+
+Instead, every update must produce a **new object or array**. React then sees a different reference and knows something changed:
+
+```
+old reference ──▶ { name: "Asha", age: 25 }
+new reference ──▶ { name: "Asha", age: 26 }   ← brand new object
+
+React sees: old !== new → re-render ✅
+```
 
 ```jsx
 const [user, setUser] = useState({ name: "Asha", age: 25 });
 
-// Wrong: mutates the existing object, so React may not re-render
+// ❌ Wrong — mutates the existing object, reference doesn't change
 user.age = 26;
+setUser(user); // React sees the same reference, skips re-render
 
-// Correct: creates a new object
+// ✅ Correct — spread creates a brand new object with a new reference
 setUser({ ...user, age: 26 });
+```
+
+The same rule applies to arrays — never use `.push()`, `.pop()`, or direct index assignment. Use methods that return a new array instead:
+
+```jsx
+const [items, setItems] = useState(["a", "b", "c"]);
+
+// ❌ Wrong — mutates the existing array
+items.push("d");
+setItems(items);
+
+// ✅ Correct — spread creates a new array
+setItems([...items, "d"]);
 ```
 
 ## Summary
